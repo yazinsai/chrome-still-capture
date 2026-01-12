@@ -1,0 +1,201 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  color: #1a1a1a;
+  background: #fff;
+  min-width: 320px;
+}
+
+.container {
+  padding: 20px;
+}
+
+h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #111;
+}
+
+.description {
+  color: #666;
+  margin-bottom: 16px;
+}
+
+.option-group {
+  margin-bottom: 16px;
+}
+
+.option-group label {
+  display: block;
+  font-size: 13px;
+  color: #444;
+  margin-bottom: 6px;
+}
+
+.option-group select {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 14px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.option-group select:focus {
+  outline: none;
+  border-color: #0066cc;
+}
+
+.primary-btn {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #fff;
+  background: #0066cc;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.primary-btn:hover {
+  background: #0052a3;
+}
+
+.primary-btn:disabled {
+  background: #99c2e8;
+  cursor: not-allowed;
+}
+
+.secondary-btn {
+  width: 100%;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #0066cc;
+  background: transparent;
+  border: 1px solid #0066cc;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.secondary-btn:hover {
+  background: #f0f7ff;
+}
+
+.btn-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Success view */
+#success-view {
+  text-align: center;
+}
+
+.success-icon {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 12px;
+  background: #00a854;
+  color: #fff;
+  font-size: 24px;
+  line-height: 48px;
+  border-radius: 50%;
+}
+
+.success-message {
+  font-size: 16px;
+  font-weight: 500;
+  color: #00a854;
+  margin-bottom: 16px;
+}
+
+.url-container {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.url-container input {
+  flex: 1;
+  padding: 10px 12px;
+  font-size: 13px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #f5f5f5;
+  color: #333;
+}
+
+.copy-btn {
+  padding: 10px 14px;
+  font-size: 16px;
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.copy-btn:hover {
+  background: #e8e8e8;
+}
+
+.copy-btn.copied {
+  background: #00a854;
+  border-color: #00a854;
+  color: #fff;
+}
+
+.expires-text {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 16px;
+}
+
+/* Error view */
+#error-view {
+  text-align: center;
+}
+
+.error-icon {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 12px;
+  background: #e53935;
+  color: #fff;
+  font-size: 24px;
+  line-height: 48px;
+  border-radius: 50%;
+}
+
+.error-message {
+  font-size: 14px;
+  color: #e53935;
+  margin-bottom: 16px;
+}

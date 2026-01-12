@@ -1,0 +1,9 @@
+{
+  "name": "page-snapshot",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "worker:dev": "cd worker && bun run dev",
+    "worker:deploy": "cd worker && bun run deploy"
+  }
+}

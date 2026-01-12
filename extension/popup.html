@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Page Snapshot</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Page Snapshot</h1>
+
+    <div id="capture-view">
+      <p class="description">Capture this page and get a shareable link</p>
+
+      <div class="option-group">
+        <label for="expiration">Link expires in:</label>
+        <select id="expiration">
+          <option value="never">Never</option>
+          <option value="30d" selected>30 days</option>
+          <option value="7d">7 days</option>
+          <option value="1d">1 day</option>
+        </select>
+      </div>
+
+      <button id="capture-btn" class="primary-btn">
+        <span class="btn-text">Capture Page</span>
+        <span class="btn-loading" hidden>
+          <span class="spinner"></span>
+          Capturing...
+        </span>
+      </button>
+    </div>
+
+    <div id="success-view" hidden>
+      <div class="success-icon">&#10003;</div>
+      <p class="success-message">Page captured!</p>
+      <div class="url-container">
+        <input type="text" id="snapshot-url" readonly>
+        <button id="copy-btn" class="copy-btn" title="Copy to clipboard">
+          <span class="copy-icon">&#128203;</span>
+        </button>
+      </div>
+      <p id="expires-text" class="expires-text"></p>
+      <button id="new-capture-btn" class="secondary-btn">Capture Another</button>
+    </div>
+
+    <div id="error-view" hidden>
+      <div class="error-icon">&#10007;</div>
+      <p class="error-message" id="error-message">Something went wrong</p>
+      <button id="retry-btn" class="primary-btn">Try Again</button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
