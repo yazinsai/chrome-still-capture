@@ -100,7 +100,7 @@ async function handleCapture(tabId, expiration) {
 // This function runs in the page context
 async function capturePageSnapshot() {
   // Fetch URL as data URL with timeout
-  async function fetchAsDataUrl(url, baseUrl) {
+  async function fetchAsDataUrl(url, baseUrl, silent = false) {
     try {
       // Handle relative URLs
       let absoluteUrl;
@@ -126,7 +126,6 @@ async function capturePageSnapshot() {
         clearTimeout(timeout);
 
         if (!response.ok) {
-          console.log('Fetch failed for:', absoluteUrl, response.status);
           return null;
         }
 
@@ -141,11 +140,10 @@ async function capturePageSnapshot() {
         });
       } catch (e) {
         clearTimeout(timeout);
-        console.log('Fetch error for:', absoluteUrl, e.message);
+        // CORS errors are expected for cross-origin resources, silently fall back
         return null;
       }
     } catch (e) {
-      console.log('fetchAsDataUrl error:', e);
       return null;
     }
   }
@@ -162,16 +160,13 @@ async function capturePageSnapshot() {
       !u.startsWith('data:') && !u.startsWith('#')
     ))];
 
-    console.log('Processing CSS URLs:', uniqueUrls.length, 'unique URLs, baseUrl:', baseUrl);
-
     await Promise.all(uniqueUrls.map(async (originalUrl) => {
       const dataUrl = await fetchAsDataUrl(originalUrl, baseUrl);
       if (dataUrl) {
         urlMap.set(originalUrl, dataUrl);
-        console.log('Inlined:', originalUrl.substring(0, 50));
-      } else {
-        console.log('Failed to inline:', originalUrl);
       }
+      // If fetch fails (CORS, etc.), we simply don't add to urlMap
+      // and the original URL will be preserved in the CSS
     }));
 
     let result = cssText;
@@ -206,21 +201,18 @@ async function capturePageSnapshot() {
             cssText += rule.cssText + '\n';
           }
         }
-        console.log(`Processing stylesheet: ${baseUrl.substring(0, 60)}... (${rules.length} rules)`);
         return await processCssUrls(cssText, baseUrl);
       } catch (e) {
-        console.log(`Cannot read cssRules for ${baseUrl}, trying fetch...`, e.message);
         // CORS blocked - try fetching the stylesheet directly
         if (sheet.href) {
           try {
             const response = await fetch(sheet.href, { credentials: 'include' });
             if (response.ok) {
               let cssText = await response.text();
-              console.log(`Fetched stylesheet: ${sheet.href.substring(0, 60)}... (${cssText.length} chars)`);
               return await processCssUrls(cssText, sheet.href);
             }
           } catch (e2) {
-            console.log('Fetch also failed:', e2.message);
+            // Silently fail - stylesheet won't be included
           }
         }
         return '';
@@ -243,24 +235,30 @@ async function capturePageSnapshot() {
 
   // Convert image to data URL
   async function imageToDataUrl(img) {
-    if (!img.src || img.src.startsWith('data:')) return img.src;
+    const originalSrc = img.src;
+    if (!originalSrc || originalSrc.startsWith('data:')) return originalSrc;
 
     if (!img.complete) {
       await new Promise(r => { img.onload = img.onerror = r; setTimeout(r, 2000); });
     }
 
     if (img.naturalWidth === 0) {
-      return await fetchAsDataUrl(img.src) || img.src;
+      // Image didn't load, try fetching directly
+      const dataUrl = await fetchAsDataUrl(originalSrc);
+      return dataUrl || originalSrc; // Keep original URL as fallback
     }
 
     try {
+      // Try canvas approach (works for same-origin and CORS-enabled images)
       const canvas = document.createElement('canvas');
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
       canvas.getContext('2d').drawImage(img, 0, 0);
       return canvas.toDataURL('image/png');
     } catch {
-      return await fetchAsDataUrl(img.src) || img.src;
+      // Canvas tainted by cross-origin image, try fetch
+      const dataUrl = await fetchAsDataUrl(originalSrc);
+      return dataUrl || originalSrc; // Keep original URL as fallback
     }
   }
 
@@ -268,12 +266,29 @@ async function capturePageSnapshot() {
   async function processImages(doc) {
     await Promise.all([...doc.querySelectorAll('img')].map(async (img) => {
       const src = img.getAttribute('src');
-      if (!src) return;
+      if (!src || src.startsWith('data:')) return;
 
-      const originalImg = document.querySelector(`img[src="${CSS.escape(src)}"]`);
-      if (originalImg) {
-        img.setAttribute('src', await imageToDataUrl(originalImg));
+      // Try to find the original image in the live DOM
+      let originalImg;
+      try {
+        originalImg = document.querySelector(`img[src="${CSS.escape(src)}"]`);
+      } catch {
+        // CSS.escape might fail on some URLs, try direct lookup
+        originalImg = [...document.querySelectorAll('img')].find(i => i.src === src);
       }
+
+      if (originalImg) {
+        const dataUrl = await imageToDataUrl(originalImg);
+        img.setAttribute('src', dataUrl);
+      } else {
+        // Image not in live DOM, try direct fetch or keep original URL
+        const dataUrl = await fetchAsDataUrl(src);
+        if (dataUrl) {
+          img.setAttribute('src', dataUrl);
+        }
+        // If fetch fails, keep original URL (already set)
+      }
+
       img.removeAttribute('srcset');
       img.removeAttribute('loading');
     }));
