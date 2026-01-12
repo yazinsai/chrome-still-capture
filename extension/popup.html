@@ -8,7 +8,15 @@
 </head>
 <body>
   <div class="container">
-    <h1>Page Snapshot</h1>
+    <div class="header">
+      <h1>Page Snapshot</h1>
+      <button id="history-toggle" class="icon-btn" title="View history">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+      </button>
+    </div>
 
     <div id="capture-view">
       <p class="description">Capture this page and get a shareable link</p>
@@ -25,30 +33,49 @@
 
       <button id="capture-btn" class="primary-btn">
         <span class="btn-text">Capture Page</span>
-        <span class="btn-loading" hidden>
+        <span class="btn-loading">
           <span class="spinner"></span>
           Capturing...
         </span>
       </button>
     </div>
 
-    <div id="success-view" hidden>
+    <div id="success-view" class="hidden">
       <div class="success-icon">&#10003;</div>
       <p class="success-message">Page captured!</p>
       <div class="url-container">
         <input type="text" id="snapshot-url" readonly>
         <button id="copy-btn" class="copy-btn" title="Copy to clipboard">
-          <span class="copy-icon">&#128203;</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
         </button>
       </div>
       <p id="expires-text" class="expires-text"></p>
       <button id="new-capture-btn" class="secondary-btn">Capture Another</button>
     </div>
 
-    <div id="error-view" hidden>
+    <div id="error-view" class="hidden">
       <div class="error-icon">&#10007;</div>
       <p class="error-message" id="error-message">Something went wrong</p>
       <button id="retry-btn" class="primary-btn">Try Again</button>
+    </div>
+
+    <div id="history-view" class="hidden">
+      <div class="history-header">
+        <button id="back-btn" class="icon-btn" title="Back">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="19" y1="12" x2="5" y2="12"></line>
+            <polyline points="12 19 5 12 12 5"></polyline>
+          </svg>
+        </button>
+        <span class="history-title">History</span>
+        <button id="clear-history-btn" class="text-btn" title="Clear all">Clear</button>
+      </div>
+      <div id="history-list" class="history-list">
+        <p class="empty-history">No snapshots yet</p>
+      </div>
     </div>
   </div>
 

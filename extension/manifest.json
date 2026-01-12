@@ -3,7 +3,7 @@
   "name": "Page Snapshot",
   "version": "1.0.0",
   "description": "Capture any page exactly as you see it and share a public link",
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "scripting", "storage"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
