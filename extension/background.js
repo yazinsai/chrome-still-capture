@@ -41,8 +41,14 @@ async function compressString(str) {
     offset += chunk.length;
   }
 
-  // Convert to base64 for JSON transport
-  return btoa(String.fromCharCode(...compressedData));
+  // Convert to base64 for JSON transport (chunk to avoid stack overflow)
+  let binary = '';
+  const chunkSize = 32768;
+  for (let i = 0; i < compressedData.length; i += chunkSize) {
+    const chunk = compressedData.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  return btoa(binary);
 }
 
 async function handleCapture(tabId, expiration) {
