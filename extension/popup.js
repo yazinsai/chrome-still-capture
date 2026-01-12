@@ -17,6 +17,7 @@ const clearHistoryBtn = document.getElementById('clear-history-btn');
 const historyList = document.getElementById('history-list');
 
 const STORAGE_KEY = 'snapshot_history';
+const EXPIRATION_KEY = 'snapshot_expiration';
 
 function showView(view) {
   captureView.classList.toggle('hidden', view !== 'capture');
@@ -196,5 +197,20 @@ clearHistoryBtn.addEventListener('click', async () => {
   }
 });
 
-// Initialize - make sure we start in capture view
-showView('capture');
+// Save expiration preference when changed
+expirationSelect.addEventListener('change', async () => {
+  await chrome.storage.local.set({ [EXPIRATION_KEY]: expirationSelect.value });
+});
+
+// Initialize
+async function init() {
+  showView('capture');
+
+  // Load saved expiration preference
+  const result = await chrome.storage.local.get(EXPIRATION_KEY);
+  if (result[EXPIRATION_KEY]) {
+    expirationSelect.value = result[EXPIRATION_KEY];
+  }
+}
+
+init();
