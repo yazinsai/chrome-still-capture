@@ -1,4 +1,4 @@
-const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_SIZE = 50 * 1024 * 1024; // 50MB (for compressed payload)
 
 function generateId() {
   const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -31,7 +31,7 @@ function parseExpiration(expiresIn) {
   return new Date(now + value * multipliers[unit]).toISOString();
 }
 
-function corsHeaders(origin) {
+function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -39,17 +39,52 @@ function corsHeaders(origin) {
   };
 }
 
+// Decompress gzip data from base64
+async function decompressHtml(base64Data) {
+  // Decode base64 to binary
+  const binaryString = atob(base64Data);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+
+  // Decompress using DecompressionStream
+  const ds = new DecompressionStream('gzip');
+  const writer = ds.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+
+  const decompressedChunks = [];
+  const reader = ds.readable.getReader();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    decompressedChunks.push(value);
+  }
+
+  // Combine chunks and decode as UTF-8
+  const totalLength = decompressedChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+  const combined = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of decompressedChunks) {
+    combined.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  return new TextDecoder().decode(combined);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const origin = request.headers.get('Origin') || '*';
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders(origin) });
+      return new Response(null, { headers: corsHeaders() });
     }
 
     if (request.method === 'POST' && url.pathname === '/api/upload') {
-      return handleUpload(request, env, origin);
+      return handleUpload(request, env);
     }
 
     if (request.method === 'GET' && url.pathname.length > 1) {
@@ -60,31 +95,39 @@ export default {
   },
 };
 
-async function handleUpload(request, env, origin) {
+async function handleUpload(request, env) {
   try {
     const contentLength = request.headers.get('Content-Length');
     if (contentLength && parseInt(contentLength) > MAX_SIZE) {
       return new Response(JSON.stringify({ error: 'Content too large' }), {
         status: 413,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders() },
       });
     }
 
     const body = await request.json();
-    const { html, title, sourceUrl, expiresIn } = body;
+    const { html, compressed, title, sourceUrl, expiresIn } = body;
 
     if (!html) {
       return new Response(JSON.stringify({ error: 'Missing html content' }), {
         status: 400,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders() },
       });
     }
 
-    if (new TextEncoder().encode(html).length > MAX_SIZE) {
-      return new Response(JSON.stringify({ error: 'Content too large' }), {
-        status: 413,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
-      });
+    // Decompress if needed
+    let finalHtml;
+    if (compressed) {
+      try {
+        finalHtml = await decompressHtml(html);
+      } catch (e) {
+        return new Response(JSON.stringify({ error: 'Failed to decompress: ' + e.message }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders() },
+        });
+      }
+    } else {
+      finalHtml = html;
     }
 
     const id = generateId();
@@ -97,7 +140,7 @@ async function handleUpload(request, env, origin) {
       expiresAt,
     };
 
-    await env.SNAPSHOTS.put(id, html, {
+    await env.SNAPSHOTS.put(id, finalHtml, {
       httpMetadata: {
         contentType: 'text/html; charset=utf-8',
       },
@@ -115,13 +158,13 @@ async function handleUpload(request, env, origin) {
       }),
       {
         status: 200,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders() },
       }
     );
   } catch (err) {
     return new Response(JSON.stringify({ error: 'Upload failed: ' + err.message }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders() },
     });
   }
 }

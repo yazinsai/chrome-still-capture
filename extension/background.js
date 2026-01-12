@@ -14,6 +14,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// Compress string using gzip
+async function compressString(str) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(str);
+
+  const cs = new CompressionStream('gzip');
+  const writer = cs.writable.getWriter();
+  writer.write(data);
+  writer.close();
+
+  const compressedChunks = [];
+  const reader = cs.readable.getReader();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    compressedChunks.push(value);
+  }
+
+  const totalLength = compressedChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+  const compressedData = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of compressedChunks) {
+    compressedData.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  // Convert to base64 for JSON transport
+  return btoa(String.fromCharCode(...compressedData));
+}
+
 async function handleCapture(tabId, expiration) {
   // Inject and execute the capture script
   const results = await chrome.scripting.executeScript({
@@ -31,6 +62,12 @@ async function handleCapture(tabId, expiration) {
     throw new Error(result?.error || 'Capture failed');
   }
 
+  // Compress HTML before upload
+  const originalSize = new TextEncoder().encode(result.html).length;
+  const compressedHtml = await compressString(result.html);
+  const compressedSize = compressedHtml.length;
+  console.log(`Compression: ${(originalSize / 1024 / 1024).toFixed(2)}MB -> ${(compressedSize / 1024 / 1024).toFixed(2)}MB (${Math.round((1 - compressedSize / originalSize) * 100)}% reduction)`);
+
   // Upload to server
   const response = await fetch(`${API_URL}/api/upload`, {
     method: 'POST',
@@ -38,7 +75,8 @@ async function handleCapture(tabId, expiration) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      html: result.html,
+      html: compressedHtml,
+      compressed: true,
       title: result.title,
       sourceUrl: result.sourceUrl,
       expiresIn: expiration,
@@ -197,64 +235,6 @@ async function capturePageSnapshot() {
     return cssTexts.filter(Boolean).join('\n');
   }
 
-  // Get computed styles
-  function getComputedStyleString(el) {
-    const computed = window.getComputedStyle(el);
-    const defaultEl = document.createElement(el.tagName);
-    document.body.appendChild(defaultEl);
-    const defaultStyles = window.getComputedStyle(defaultEl);
-
-    let styles = '';
-    for (let i = 0; i < computed.length; i++) {
-      const prop = computed[i];
-      const value = computed.getPropertyValue(prop);
-      const defaultValue = defaultStyles.getPropertyValue(prop);
-      if (value !== defaultValue) {
-        styles += `${prop}:${value};`;
-      }
-    }
-    defaultEl.remove();
-    return styles;
-  }
-
-  // Find original element by path
-  function findOriginalElement(clonedEl, clonedDoc) {
-    const path = [];
-    let current = clonedEl;
-    while (current && current !== clonedDoc.documentElement) {
-      const parent = current.parentElement;
-      if (parent) {
-        path.unshift(Array.from(parent.children).indexOf(current));
-      }
-      current = parent;
-    }
-
-    current = document.documentElement;
-    for (const index of path) {
-      if (current?.children[index]) {
-        current = current.children[index];
-      } else {
-        return null;
-      }
-    }
-    return current;
-  }
-
-  // Apply computed styles
-  function applyComputedStyles(doc) {
-    for (const el of doc.body.querySelectorAll('*')) {
-      const originalEl = findOriginalElement(el, doc);
-      if (originalEl) {
-        try {
-          const styles = getComputedStyleString(originalEl);
-          if (styles) {
-            el.setAttribute('style', (el.getAttribute('style') || '') + styles);
-          }
-        } catch {}
-      }
-    }
-  }
-
   // Convert image to data URL
   async function imageToDataUrl(img) {
     if (!img.src || img.src.startsWith('data:')) return img.src;
@@ -384,7 +364,7 @@ async function capturePageSnapshot() {
 
     removeScripts(tempDoc);
     removeExternalResources(tempDoc);
-    applyComputedStyles(tempDoc);
+    // Note: Skipping computed styles - rely on captured CSS instead (much smaller)
 
     await Promise.all([
       processImages(tempDoc),
