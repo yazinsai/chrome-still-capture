@@ -15,6 +15,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // Keep channel open for async response
   }
 
+  if (message.action === 'startElementCapture') {
+    handleStartElementCapture(message.tabId, message.expiration)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (message.action === 'captureSelectedElement') {
+    const tabId = sender.tab?.id || message.tabId;
+    handleSelectedElementCapture(tabId, message.expiration, message.marker)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
   if (message.action === 'captureComplete') {
     // This is handled by the pending promise
     return false;
@@ -102,11 +117,12 @@ async function compressString(str) {
   return btoa(binary);
 }
 
-async function handleCapture(tabId, expiration) {
+async function handleCapture(tabId, expiration, options = {}) {
   // Inject and execute the capture script
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: capturePageSnapshot,
+    args: [options],
   });
 
   if (!results || results.length === 0) {
@@ -145,11 +161,354 @@ async function handleCapture(tabId, expiration) {
     throw new Error(`Upload failed: ${text}`);
   }
 
-  return await response.json();
+  const responseData = await response.json();
+  return {
+    ...responseData,
+    title: result.title,
+    sourceUrl: result.sourceUrl,
+  };
+}
+
+async function handleStartElementCapture(tabId, expiration) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: startElementPicker,
+    args: [expiration],
+  });
+
+  const result = results?.[0]?.result;
+  if (!result?.success) {
+    throw new Error(result?.error || 'Failed to start element picker');
+  }
+
+  return { success: true };
+}
+
+async function handleSelectedElementCapture(tabId, expiration, marker) {
+  if (!tabId) {
+    throw new Error('No active tab found');
+  }
+
+  if (!marker) {
+    throw new Error('No selected element found');
+  }
+
+  const response = await handleCapture(tabId, expiration, { targetMarker: marker });
+  await saveToHistory({
+    url: response.url,
+    title: response.title || 'Selected portion',
+    sourceUrl: response.sourceUrl || '',
+    createdAt: new Date().toISOString(),
+    expiresAt: response.expiresAt,
+  });
+
+  return response;
+}
+
+async function saveToHistory(item) {
+  const storageKey = 'snapshot_history';
+  const result = await chrome.storage.local.get(storageKey);
+  const history = result[storageKey] || [];
+
+  history.unshift(item);
+  if (history.length > 50) history.pop();
+
+  await chrome.storage.local.set({ [storageKey]: history });
+}
+
+// This function runs in the page context and stays alive after the popup closes.
+function startElementPicker(expiration) {
+  try {
+    if (window.__pageSnapshotPickerCleanup) {
+      window.__pageSnapshotPickerCleanup();
+    }
+
+    const markerAttribute = 'data-page-snapshot-target';
+    const uiAttribute = 'data-page-snapshot-ui';
+    const marker = `ps-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    let currentElement = null;
+    let lastMouseX = Math.floor(window.innerWidth / 2);
+    let lastMouseY = Math.floor(window.innerHeight / 2);
+    let isCapturing = false;
+
+    const overlay = document.createElement('div');
+    overlay.setAttribute(uiAttribute, 'true');
+    overlay.style.cssText = [
+      'position:fixed',
+      'z-index:2147483647',
+      'pointer-events:none',
+      'border:2px solid #0066cc',
+      'background:rgba(0,102,204,0.08)',
+      'box-shadow:0 0 0 99999px rgba(0,0,0,0.18)',
+      'border-radius:4px',
+      'transition:all 80ms ease',
+      'display:none',
+    ].join(';');
+
+    const label = document.createElement('div');
+    label.setAttribute(uiAttribute, 'true');
+    label.style.cssText = [
+      'position:fixed',
+      'z-index:2147483647',
+      'pointer-events:none',
+      'padding:4px 8px',
+      'border-radius:6px',
+      'background:#0066cc',
+      'color:white',
+      'font:12px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif',
+      'box-shadow:0 4px 12px rgba(0,0,0,0.2)',
+      'display:none',
+    ].join(';');
+
+    const hint = document.createElement('div');
+    hint.setAttribute(uiAttribute, 'true');
+    hint.style.cssText = [
+      'position:fixed',
+      'left:50%',
+      'bottom:20px',
+      'transform:translateX(-50%)',
+      'z-index:2147483647',
+      'padding:10px 12px',
+      'border-radius:999px',
+      'background:#111',
+      'color:white',
+      'font:13px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif',
+      'box-shadow:0 8px 24px rgba(0,0,0,0.25)',
+    ].join(';');
+    hint.textContent = 'Hover to choose. Enter capture, Esc cancel, arrows move DOM.';
+
+    document.documentElement.append(overlay, label, hint);
+
+    function cleanup() {
+      document.removeEventListener('mousemove', onMouseMove, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('scroll', updateOverlay, true);
+      window.removeEventListener('resize', updateOverlay, true);
+      overlay.remove();
+      label.remove();
+      hint.remove();
+      window.__pageSnapshotPickerCleanup = null;
+    }
+
+    window.__pageSnapshotPickerCleanup = cleanup;
+
+    function isPickerUi(element) {
+      return element?.hasAttribute?.(uiAttribute) || Boolean(element?.closest?.(`[${uiAttribute}]`));
+    }
+
+    function getUsableRect(element) {
+      if (!element || isPickerUi(element) || element === document.documentElement) return null;
+
+      const rect = element.getBoundingClientRect();
+      if (rect.width < 3 || rect.height < 3) return null;
+
+      return rect;
+    }
+
+    function describeElement(element) {
+      const rect = element.getBoundingClientRect();
+      const id = element.id ? `#${element.id}` : '';
+      const classes = [...element.classList].slice(0, 3).map((className) => `.${className}`).join('');
+      return `${element.tagName.toLowerCase()}${id}${classes} ${Math.round(rect.width)}x${Math.round(rect.height)}`;
+    }
+
+    function setCurrentElement(element) {
+      if (isCapturing) return;
+
+      let nextElement = element;
+      while (nextElement && !getUsableRect(nextElement)) {
+        nextElement = nextElement.parentElement;
+      }
+
+      currentElement = nextElement || document.body;
+      updateOverlay();
+    }
+
+    function updateOverlay() {
+      const rect = getUsableRect(currentElement);
+      if (!rect) {
+        overlay.style.display = 'none';
+        label.style.display = 'none';
+        return;
+      }
+
+      overlay.style.display = 'block';
+      overlay.style.left = `${Math.max(0, rect.left)}px`;
+      overlay.style.top = `${Math.max(0, rect.top)}px`;
+      overlay.style.width = `${rect.width}px`;
+      overlay.style.height = `${rect.height}px`;
+
+      label.style.display = 'block';
+      label.textContent = describeElement(currentElement);
+      label.style.left = `${Math.max(8, rect.left)}px`;
+      label.style.top = `${Math.max(8, rect.top - 30)}px`;
+    }
+
+    function getFirstVisibleChild(element) {
+      return [...element.children].find((child) => getUsableRect(child));
+    }
+
+    function getChildAtPoint(element) {
+      const pointElement = document.elementFromPoint(lastMouseX, lastMouseY);
+      let child = pointElement;
+
+      while (child && child.parentElement !== element) {
+        child = child.parentElement;
+      }
+
+      return getUsableRect(child) ? child : getFirstVisibleChild(element);
+    }
+
+    function getSibling(element, direction) {
+      let sibling = direction === 'previous' ? element.previousElementSibling : element.nextElementSibling;
+
+      while (sibling && !getUsableRect(sibling)) {
+        sibling = direction === 'previous' ? sibling.previousElementSibling : sibling.nextElementSibling;
+      }
+
+      return sibling;
+    }
+
+    function showResultCard(url) {
+      const card = document.createElement('div');
+      card.setAttribute(uiAttribute, 'true');
+      card.style.cssText = [
+        'position:fixed',
+        'right:16px',
+        'top:16px',
+        'z-index:2147483647',
+        'width:320px',
+        'padding:14px',
+        'border-radius:12px',
+        'background:white',
+        'color:#111',
+        'font:13px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif',
+        'box-shadow:0 14px 40px rgba(0,0,0,0.25)',
+        'border:1px solid rgba(0,0,0,0.08)',
+      ].join(';');
+
+      card.innerHTML = `
+        <div style="font-weight:600;margin-bottom:8px">Portion captured</div>
+        <input value="${url.replace(/"/g, '&quot;')}" readonly style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-bottom:10px;font:12px monospace">
+        <div style="display:flex;gap:8px">
+          <button data-copy style="flex:1;padding:8px;border:0;border-radius:6px;background:#0066cc;color:white;cursor:pointer">Copy</button>
+          <a href="${url.replace(/"/g, '&quot;')}" target="_blank" rel="noreferrer" style="flex:1;text-align:center;padding:8px;border-radius:6px;background:#f0f7ff;color:#0066cc;text-decoration:none">Open</a>
+          <button data-close style="padding:8px;border:0;border-radius:6px;background:#eee;color:#333;cursor:pointer">Close</button>
+        </div>
+      `;
+
+      card.querySelector('[data-copy]').addEventListener('click', async () => {
+        const input = card.querySelector('input');
+        try {
+          await navigator.clipboard.writeText(url);
+        } catch {
+          input.select();
+          document.execCommand('copy');
+        }
+        card.querySelector('[data-copy]').textContent = 'Copied';
+      });
+
+      card.querySelector('[data-close]').addEventListener('click', () => card.remove());
+      document.documentElement.append(card);
+    }
+
+    async function captureCurrentElement() {
+      if (!currentElement || isCapturing) return;
+
+      isCapturing = true;
+      currentElement.setAttribute(markerAttribute, marker);
+      hint.textContent = 'Capturing selected portion...';
+
+      document.removeEventListener('mousemove', onMouseMove, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+
+      try {
+        const response = await chrome.runtime.sendMessage({
+          action: 'captureSelectedElement',
+          expiration,
+          marker,
+        });
+
+        if (response?.error) {
+          throw new Error(response.error);
+        }
+
+        cleanup();
+        showResultCard(response.url);
+      } catch (error) {
+        currentElement.removeAttribute(markerAttribute);
+        isCapturing = false;
+        hint.textContent = error.message || 'Capture failed';
+        document.addEventListener('mousemove', onMouseMove, true);
+        document.addEventListener('keydown', onKeyDown, true);
+      }
+    }
+
+    function onMouseMove(event) {
+      lastMouseX = event.clientX;
+      lastMouseY = event.clientY;
+      setCurrentElement(document.elementFromPoint(lastMouseX, lastMouseY));
+    }
+
+    function onKeyDown(event) {
+      if (!currentElement) return;
+
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        cleanup();
+        return;
+      }
+
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        event.stopPropagation();
+        void captureCurrentElement();
+        return;
+      }
+
+      const navigationKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+      if (!navigationKeys.includes(event.key)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === 'ArrowUp' && currentElement.parentElement) {
+        setCurrentElement(currentElement.parentElement);
+      } else if (event.key === 'ArrowDown') {
+        setCurrentElement(getChildAtPoint(currentElement));
+      } else if (event.key === 'ArrowLeft') {
+        setCurrentElement(getSibling(currentElement, 'previous') || currentElement);
+      } else if (event.key === 'ArrowRight') {
+        setCurrentElement(getSibling(currentElement, 'next') || currentElement);
+      }
+    }
+
+    document.addEventListener('mousemove', onMouseMove, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('scroll', updateOverlay, true);
+    window.addEventListener('resize', updateOverlay, true);
+
+    setCurrentElement(document.elementFromPoint(lastMouseX, lastMouseY) || document.body);
+
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message || 'Failed to start element picker',
+    };
+  }
 }
 
 // This function runs in the page context
-async function capturePageSnapshot() {
+async function capturePageSnapshot(options = {}) {
+  const targetMarker = options?.targetMarker;
+  const targetAttribute = 'data-page-snapshot-target';
+  const canvasAttribute = 'data-page-snapshot-canvas-index';
+  let originalTargetElement = null;
+  let originalCanvases = [];
+
   async function fetchViaExtensionAsDataUrl(absoluteUrl) {
     try {
       if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) return null;
@@ -404,14 +763,17 @@ async function capturePageSnapshot() {
 
   // Process canvases
   function processCanvases(doc) {
-    const canvases = document.querySelectorAll('canvas');
-    const clonedCanvases = doc.querySelectorAll('canvas');
-    canvases.forEach((canvas, i) => {
+    const clonedCanvases = doc.querySelectorAll(`canvas[${canvasAttribute}]`);
+    clonedCanvases.forEach((clonedCanvas) => {
       try {
+        const originalIndex = Number(clonedCanvas.getAttribute(canvasAttribute));
+        const canvas = originalCanvases[originalIndex];
+        if (!canvas) return;
+
         const img = doc.createElement('img');
         img.src = canvas.toDataURL();
         img.style.cssText = window.getComputedStyle(canvas).cssText;
-        clonedCanvases[i]?.replaceWith(img);
+        clonedCanvas.replaceWith(img);
       } catch {}
     });
   }
@@ -459,13 +821,52 @@ async function capturePageSnapshot() {
     doc.querySelectorAll('link[rel="stylesheet"], link[rel="preload"], link[rel="prefetch"], link[rel="modulepreload"], link[rel="preconnect"], link[rel="dns-prefetch"], style').forEach(el => el.remove());
   }
 
+  function removePickerUi(doc) {
+    doc.querySelectorAll('[data-page-snapshot-ui]').forEach(el => el.remove());
+  }
+
+  function isolateTargetPath(doc, marker) {
+    const target = doc.querySelector(`[${targetAttribute}="${marker}"]`);
+
+    if (!target) {
+      throw new Error('Selected element is no longer available');
+    }
+
+    target.removeAttribute(targetAttribute);
+
+    let current = target;
+    while (current && current !== doc.body) {
+      const parent = current.parentElement;
+      if (!parent) break;
+
+      [...parent.children].forEach((child) => {
+        if (child !== current) child.remove();
+      });
+
+      current = parent;
+    }
+  }
+
   // Main capture logic
   try {
+    if (targetMarker) {
+      originalTargetElement = document.querySelector(`[${targetAttribute}="${targetMarker}"]`);
+    }
+    originalCanvases = [...document.querySelectorAll('canvas')];
+    originalCanvases.forEach((canvas, index) => {
+      canvas.setAttribute(canvasAttribute, String(index));
+    });
+
     const allCSS = await getAllStylesheetCSS();
 
     const docClone = document.documentElement.cloneNode(true);
     const tempDoc = document.implementation.createHTMLDocument('');
     tempDoc.replaceChild(docClone, tempDoc.documentElement);
+
+    removePickerUi(tempDoc);
+    if (targetMarker) {
+      isolateTargetPath(tempDoc, targetMarker);
+    }
 
     removeScripts(tempDoc);
     removeExternalResources(tempDoc);
@@ -498,7 +899,7 @@ async function capturePageSnapshot() {
     return {
       success: true,
       html,
-      title: document.title,
+      title: targetMarker ? `${document.title} - selection` : document.title,
       sourceUrl: location.href,
     };
   } catch (error) {
@@ -506,5 +907,12 @@ async function capturePageSnapshot() {
       success: false,
       error: error.message || 'Capture failed',
     };
+  } finally {
+    if (originalTargetElement) {
+      originalTargetElement.removeAttribute(targetAttribute);
+    }
+    originalCanvases.forEach((canvas) => {
+      canvas.removeAttribute(canvasAttribute);
+    });
   }
 }

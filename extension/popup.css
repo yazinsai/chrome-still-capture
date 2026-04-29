@@ -82,6 +82,12 @@ h1 {
   border-color: #0066cc;
 }
 
+.capture-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .primary-btn {
   width: 100%;
   padding: 12px 16px;

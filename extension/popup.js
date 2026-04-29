@@ -15,6 +15,7 @@ const historyToggle = document.getElementById('history-toggle');
 const backBtn = document.getElementById('back-btn');
 const clearHistoryBtn = document.getElementById('clear-history-btn');
 const historyList = document.getElementById('history-list');
+const captureSelectionBtn = document.getElementById('capture-selection-btn');
 
 const STORAGE_KEY = 'snapshot_history';
 const EXPIRATION_KEY = 'snapshot_expiration';
@@ -31,6 +32,7 @@ function showView(view) {
 
 function setLoading(loading) {
   captureBtn.disabled = loading;
+  captureSelectionBtn.disabled = loading;
   captureBtn.classList.toggle('loading', loading);
 }
 
@@ -190,6 +192,38 @@ async function captureCurrentPage() {
   }
 }
 
+async function startElementCapture() {
+  setLoading(true);
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    if (!tab) {
+      throw new Error('No active tab found');
+    }
+
+    if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+      throw new Error('Cannot capture browser internal pages');
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      action: 'startElementCapture',
+      tabId: tab.id,
+      expiration: expirationSelect.value,
+    });
+
+    if (response?.error) {
+      throw new Error(response.error);
+    }
+
+    window.close();
+  } catch (err) {
+    errorMessage.textContent = err.message || 'Something went wrong';
+    showView('error');
+    setLoading(false);
+  }
+}
+
 async function copyToClipboard() {
   try {
     await navigator.clipboard.writeText(snapshotUrlInput.value);
@@ -203,6 +237,7 @@ async function copyToClipboard() {
 
 // Event listeners
 captureBtn.addEventListener('click', captureCurrentPage);
+captureSelectionBtn.addEventListener('click', startElementCapture);
 copyBtn.addEventListener('click', copyToClipboard);
 newCaptureBtn.addEventListener('click', () => showView('capture'));
 retryBtn.addEventListener('click', () => {
