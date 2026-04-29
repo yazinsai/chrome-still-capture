@@ -1,6 +1,13 @@
 const API_URL = 'https://page-snapshot.i-f17.workers.dev';
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'fetchResource') {
+    fetchResourceAsDataUrl(message.url)
+      .then((dataUrl) => sendResponse({ dataUrl }))
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
   if (message.action === 'capture') {
     handleCapture(message.tabId, message.expiration)
       .then(sendResponse)
@@ -13,6 +20,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 });
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 32768;
+
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+
+  return btoa(binary);
+}
+
+async function fetchResourceAsDataUrl(url) {
+  let absoluteUrl;
+  try {
+    absoluteUrl = new URL(url).href;
+  } catch {
+    throw new Error('Invalid resource URL');
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const response = await fetch(absoluteUrl, {
+      credentials: 'include',
+      cache: 'force-cache',
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Resource fetch failed: ${response.status}`);
+    }
+
+    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength === 0) return null;
+
+    return `data:${contentType.split(';')[0]};base64,${arrayBufferToBase64(buffer)}`;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 // Compress string using gzip
 async function compressString(str) {
@@ -99,6 +150,21 @@ async function handleCapture(tabId, expiration) {
 
 // This function runs in the page context
 async function capturePageSnapshot() {
+  async function fetchViaExtensionAsDataUrl(absoluteUrl) {
+    try {
+      if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) return null;
+
+      const response = await chrome.runtime.sendMessage({
+        action: 'fetchResource',
+        url: absoluteUrl,
+      });
+
+      return response?.dataUrl || null;
+    } catch {
+      return null;
+    }
+  }
+
   // Fetch URL as data URL with timeout
   async function fetchAsDataUrl(url, baseUrl, silent = false) {
     try {
@@ -111,6 +177,8 @@ async function capturePageSnapshot() {
       }
 
       if (absoluteUrl.startsWith('data:')) return absoluteUrl;
+
+      const fetchViaExtension = () => fetchViaExtensionAsDataUrl(absoluteUrl);
 
       // Create abort controller for timeout
       const controller = new AbortController();
@@ -126,11 +194,11 @@ async function capturePageSnapshot() {
         clearTimeout(timeout);
 
         if (!response.ok) {
-          return null;
+          return await fetchViaExtension();
         }
 
         const blob = await response.blob();
-        if (blob.size === 0) return null;
+        if (blob.size === 0) return await fetchViaExtension();
 
         return new Promise((resolve) => {
           const reader = new FileReader();
@@ -140,8 +208,9 @@ async function capturePageSnapshot() {
         });
       } catch (e) {
         clearTimeout(timeout);
-        // CORS errors are expected for cross-origin resources, silently fall back
-        return null;
+        // CORS errors are expected for cross-origin resources; the extension
+        // worker can still read many resources that are display-only to the page.
+        return await fetchViaExtension();
       }
     } catch (e) {
       return null;
@@ -235,7 +304,7 @@ async function capturePageSnapshot() {
 
   // Convert image to data URL
   async function imageToDataUrl(img) {
-    const originalSrc = img.src;
+    const originalSrc = img.currentSrc || img.src;
     if (!originalSrc || originalSrc.startsWith('data:')) return originalSrc;
 
     if (!img.complete) {
@@ -264,33 +333,48 @@ async function capturePageSnapshot() {
 
   // Process images
   async function processImages(doc) {
+    const liveImages = [...document.querySelectorAll('img')];
+    const documentBaseUrl = document.baseURI || location.href;
+
+    function toAbsoluteUrl(url) {
+      try {
+        return new URL(url, documentBaseUrl).href;
+      } catch {
+        return null;
+      }
+    }
+
+    function findOriginalImage(src) {
+      const absoluteSrc = toAbsoluteUrl(src);
+
+      return liveImages.find((candidate) => {
+        const candidateSrc = candidate.getAttribute('src');
+        return (
+          candidateSrc === src ||
+          (absoluteSrc && (candidate.src === absoluteSrc || candidate.currentSrc === absoluteSrc))
+        );
+      });
+    }
+
     await Promise.all([...doc.querySelectorAll('img')].map(async (img) => {
       const src = img.getAttribute('src');
+      img.removeAttribute('srcset');
+      img.removeAttribute('loading');
+
       if (!src || src.startsWith('data:')) return;
 
-      // Try to find the original image in the live DOM
-      let originalImg;
-      try {
-        originalImg = document.querySelector(`img[src="${CSS.escape(src)}"]`);
-      } catch {
-        // CSS.escape might fail on some URLs, try direct lookup
-        originalImg = [...document.querySelectorAll('img')].find(i => i.src === src);
-      }
-
+      const originalImg = findOriginalImage(src);
       if (originalImg) {
         const dataUrl = await imageToDataUrl(originalImg);
         img.setAttribute('src', dataUrl);
       } else {
         // Image not in live DOM, try direct fetch or keep original URL
-        const dataUrl = await fetchAsDataUrl(src);
+        const dataUrl = await fetchAsDataUrl(src, documentBaseUrl);
         if (dataUrl) {
           img.setAttribute('src', dataUrl);
         }
         // If fetch fails, keep original URL (already set)
       }
-
-      img.removeAttribute('srcset');
-      img.removeAttribute('loading');
     }));
   }
 

@@ -343,3 +343,12 @@ h1 {
 .history-item-actions .open-btn:hover {
   background: #f0f7ff;
 }
+
+.history-item-actions .delete-btn {
+  color: #e53935;
+  border-color: #e53935;
+}
+
+.history-item-actions .delete-btn:hover {
+  background: #fef2f2;
+}

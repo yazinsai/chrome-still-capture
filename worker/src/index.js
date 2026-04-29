@@ -34,7 +34,7 @@ function parseExpiration(expiresIn) {
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'DELETE, GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
   };
 }
@@ -89,6 +89,10 @@ export default {
 
     if (request.method === 'GET' && url.pathname.length > 1) {
       return handleServe(request, env, url.pathname.slice(1));
+    }
+
+    if (request.method === 'DELETE' && url.pathname.length > 1) {
+      return handleDelete(env, url.pathname.slice(1));
     }
 
     return new Response('Not Found', { status: 404 });
@@ -189,7 +193,7 @@ async function handleServe(request, env, id) {
 
     const headers = new Headers();
     headers.set('Content-Type', 'text/html; charset=utf-8');
-    headers.set('Cache-Control', 'public, max-age=3600');
+    headers.set('Cache-Control', 'no-store');
 
     if (metadata.expiresAt) {
       headers.set('X-Expires-At', metadata.expiresAt);
@@ -201,5 +205,30 @@ async function handleServe(request, env, id) {
     return new Response(object.body, { headers });
   } catch (err) {
     return new Response('Error retrieving snapshot', { status: 500 });
+  }
+}
+
+async function handleDelete(env, id) {
+  try {
+    const object = await env.SNAPSHOTS.get(id);
+
+    if (!object) {
+      return new Response('Snapshot not found', {
+        status: 404,
+        headers: corsHeaders(),
+      });
+    }
+
+    await env.SNAPSHOTS.delete(id);
+
+    return new Response(null, {
+      status: 204,
+      headers: corsHeaders(),
+    });
+  } catch (err) {
+    return new Response('Error deleting snapshot', {
+      status: 500,
+      headers: corsHeaders(),
+    });
   }
 }

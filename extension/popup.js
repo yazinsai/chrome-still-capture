@@ -52,6 +52,25 @@ async function clearHistory() {
   renderHistory([]);
 }
 
+async function deleteHistoryItem(index) {
+  const history = await getHistory();
+  const [item] = history.splice(index, 1);
+
+  if (item?.url) {
+    try {
+      const response = await fetch(item.url, { method: 'DELETE' });
+      if (!response.ok && response.status !== 404 && response.status !== 410) {
+        throw new Error(`Delete failed: ${response.status}`);
+      }
+    } catch (err) {
+      console.warn('Failed to delete remote snapshot:', err);
+    }
+  }
+
+  await chrome.storage.local.set({ [STORAGE_KEY]: history });
+  renderHistory(history);
+}
+
 function renderHistory(history) {
   if (history.length === 0) {
     historyList.innerHTML = '<p class="empty-history">No snapshots yet</p>';
@@ -66,6 +85,7 @@ function renderHistory(history) {
         <div class="history-item-actions">
           <button class="copy-btn-small" data-url="${escapeHtml(item.url)}">Copy</button>
           <button class="open-btn" data-url="${escapeHtml(item.url)}">Open</button>
+          <button class="delete-btn" data-index="${index}">Delete</button>
         </div>
       </div>
     </div>
@@ -85,6 +105,13 @@ function renderHistory(history) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       chrome.tabs.create({ url: btn.dataset.url });
+    });
+  });
+
+  historyList.querySelectorAll('.delete-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await deleteHistoryItem(Number(btn.dataset.index));
     });
   });
 }
