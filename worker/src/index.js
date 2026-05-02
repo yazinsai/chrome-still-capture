@@ -1,4 +1,22 @@
 const MAX_SIZE = 50 * 1024 * 1024; // 50MB (for compressed payload)
+const SNAPSHOT_CSP = [
+  "sandbox",
+  "default-src 'none'",
+  "script-src 'none'",
+  "connect-src 'none'",
+  "img-src data: blob:",
+  "media-src data: blob:",
+  "font-src data:",
+  "style-src 'unsafe-inline'",
+  "frame-src 'none'",
+  "child-src 'none'",
+  "worker-src 'none'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "manifest-src 'none'",
+  "navigate-to 'none'",
+].join('; ');
 
 function generateId() {
   const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -194,6 +212,13 @@ async function handleServe(request, env, id) {
     const headers = new Headers();
     headers.set('Content-Type', 'text/html; charset=utf-8');
     headers.set('Cache-Control', 'no-store');
+    headers.set('Content-Security-Policy', SNAPSHOT_CSP);
+    headers.set('Referrer-Policy', 'no-referrer');
+    headers.set('X-Content-Type-Options', 'nosniff');
+    headers.set(
+      'Permissions-Policy',
+      'accelerometer=(), autoplay=(), camera=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), usb=()'
+    );
 
     if (metadata.expiresAt) {
       headers.set('X-Expires-At', metadata.expiresAt);

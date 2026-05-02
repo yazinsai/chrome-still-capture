@@ -727,12 +727,13 @@ async function capturePageSnapshot(options = {}) {
         const dataUrl = await imageToDataUrl(originalImg);
         img.setAttribute('src', dataUrl);
       } else {
-        // Image not in live DOM, try direct fetch or keep original URL
+        // Image not in live DOM, try direct fetch or strip the URL.
         const dataUrl = await fetchAsDataUrl(src, documentBaseUrl);
         if (dataUrl) {
           img.setAttribute('src', dataUrl);
+        } else {
+          img.removeAttribute('src');
         }
-        // If fetch fails, keep original URL (already set)
       }
     }));
   }
@@ -787,7 +788,14 @@ async function capturePageSnapshot(options = {}) {
         const iframeDoc = original?.contentDocument;
 
         if (iframeDoc?.body) {
-          iframe.setAttribute('srcdoc', iframeDoc.documentElement.outerHTML);
+          const iframeClone = iframeDoc.documentElement.cloneNode(true);
+          const iframeTempDoc = document.implementation.createHTMLDocument('');
+          iframeTempDoc.replaceChild(iframeClone, iframeTempDoc.documentElement);
+          removeActiveContent(iframeTempDoc);
+          removeExternalResources(iframeTempDoc);
+          removeExternalRequestUrls(iframeTempDoc);
+
+          iframe.setAttribute('srcdoc', iframeTempDoc.documentElement.outerHTML);
           iframe.removeAttribute('src');
         } else {
           const div = doc.createElement('div');
@@ -804,15 +812,55 @@ async function capturePageSnapshot(options = {}) {
     }
   }
 
-  // Remove scripts
-  function removeScripts(doc) {
+  function removeUrlAttribute(el, attrName) {
+    const value = el.getAttribute(attrName);
+    if (!value) return;
+
+    const normalized = value.trim().toLowerCase();
+    const isLocalReference = normalized.startsWith('#');
+    const isEmbeddedResource =
+      normalized.startsWith('data:') ||
+      normalized.startsWith('blob:') ||
+      normalized === 'about:blank';
+
+    if (!isLocalReference && !isEmbeddedResource) {
+      el.removeAttribute(attrName);
+    }
+  }
+
+  // Remove scripts and request-capable markup
+  function removeActiveContent(doc) {
     doc.querySelectorAll('script, noscript').forEach(el => el.remove());
+    doc.querySelectorAll('object, embed, portal, fencedframe').forEach(el => el.remove());
     doc.querySelectorAll('*').forEach(el => {
       [...el.attributes].forEach(attr => {
-        if (attr.name.startsWith('on') || (attr.name === 'href' && attr.value.startsWith('javascript:'))) {
+        const attrName = attr.name.toLowerCase();
+        const attrValue = attr.value.trim().toLowerCase();
+
+        if (
+          attrName.startsWith('on') ||
+          attrName === 'ping' ||
+          attrName === 'nonce' ||
+          attrName === 'integrity' ||
+          attrName === 'srcset' ||
+          attrName === 'action' ||
+          attrName === 'formaction' ||
+          attrName === 'poster' ||
+          (attrName === 'href' && attrValue.startsWith('javascript:'))
+        ) {
           el.removeAttribute(attr.name);
         }
       });
+    });
+  }
+
+  function removeExternalRequestUrls(doc) {
+    doc.querySelectorAll('[src], [href], [xlink\\:href]').forEach((el) => {
+      if (el.matches('a[href], area[href]')) return;
+
+      removeUrlAttribute(el, 'src');
+      removeUrlAttribute(el, 'href');
+      removeUrlAttribute(el, 'xlink:href');
     });
   }
 
@@ -868,7 +916,7 @@ async function capturePageSnapshot(options = {}) {
       isolateTargetPath(tempDoc, targetMarker);
     }
 
-    removeScripts(tempDoc);
+    removeActiveContent(tempDoc);
     removeExternalResources(tempDoc);
     // Note: Skipping computed styles - rely on captured CSS instead (much smaller)
 
@@ -880,6 +928,7 @@ async function capturePageSnapshot(options = {}) {
 
     processCanvases(tempDoc);
     processIframes(tempDoc);
+    removeExternalRequestUrls(tempDoc);
 
     // Add CSS
     const styleEl = tempDoc.createElement('style');
